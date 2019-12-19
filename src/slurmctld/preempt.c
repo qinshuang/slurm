@@ -111,13 +111,89 @@ static int _is_job_preempt_exempt(job_record_t *preemptee_ptr,
 	return 0;
 }
 
+static int _comp_pack_job_id(void *x, void *key)
+{
+	job_record_t *job_ptr = (job_record_t *)x;
+	uint32_t job_id = *(uint32_t *)key;
+
+	return (job_ptr->job_id == job_id);
+}
+
+static int _is_job_preemptable(void *x, void *key)
+{
+	job_record_t *preemptee_ptr = (job_record_t *)x;
+	job_record_t *preemptor_ptr = (job_record_t *)key;
+
+	return !_is_job_preempt_exempt(preemptee_ptr, preemptor_ptr);
+}
+
+static int _is_hetjob_preempt_exempt(job_record_t *preemptee_master_ptr,
+				     job_record_t *preemptor_ptr)
+{
+	xassert(preemptee_master_ptr);
+	xassert(preemptor_ptr);
+
+	/*
+	 * if any component job is preemptable then het job is not
+	 * preempt exempt
+	 */
+        if (list_find_first(preemptee_master_ptr->pack_job_list,
+			    _is_job_preemptable, preemptor_ptr))
+		return 0;
+	return 1;
+}
+
+/*
+ * Return the PreemptMode which should apply to stop this job
+ */
+static uint16_t _job_preempt_mode_internal(job_record_t *job_ptr)
+{
+	uint16_t data = (uint16_t)PREEMPT_MODE_OFF;
+
+	if ((slurm_preempt_init() < 0) ||
+	    ((*(ops.get_data))(job_ptr, PREEMPT_DATA_MODE, &data) !=
+	     SLURM_SUCCESS))
+		return data;
+
+	return data;
+}
+
+static int _find_job_by_preempt_mode(void *x, void *arg)
+{
+	job_record_t *job_ptr = (job_record_t *)x;
+	uint16_t preempt_mode = *(uint16_t *)arg;
+
+	if (_job_preempt_mode_internal(job_ptr) == preempt_mode)
+		return 1;
+
+	return 0;
+}
+
 static int _add_preemptable_job(void *x, void *arg)
 {
 	job_record_t *candidate = (job_record_t *) x;
 	preempt_candidates_t *candidates = (preempt_candidates_t *) arg;
 	job_record_t *preemptor = candidates->preemptor;
 
-	if (_is_job_preempt_exempt(candidate, preemptor))
+	if (candidate->pack_job_id &&
+	    (candidate->pack_job_id != candidate->job_id)) {
+		candidate = find_job_record(candidate->pack_job_id);
+		if (!candidate || !candidate->pack_job_list) {
+			error("%s: hetjob master is corrupt! This should never happen",
+			      __func__);
+			return 0;
+		}
+
+		/* if the master is already a candidate, skip */
+		if (candidates->preemptee_job_list &&
+		    list_find_first(candidates->preemptee_job_list,
+				    _comp_pack_job_id,
+				    &candidate->job_id))
+			return 0;
+
+		if (_is_hetjob_preempt_exempt(candidate, preemptor))
+			return 0;
+	} else if (_is_job_preempt_exempt(candidate, preemptor))
 		return 0;
 
 	/* This job is a preemption candidate */
@@ -219,11 +295,10 @@ extern int slurm_preempt_fini(void)
 
 extern List slurm_find_preemptable_jobs(job_record_t *job_ptr)
 {
-	preempt_candidates_t candidates
-		= { .preemptor = job_ptr, .preemptee_job_list = NULL };
+	preempt_candidates_t candidates	= { .preemptor = job_ptr };
 
 	/* Validate the preemptor job */
-	if (job_ptr == NULL) {
+	if (!job_ptr) {
 		error("%s: job_ptr is NULL", __func__);
 		return NULL;
 	}
@@ -231,11 +306,11 @@ extern List slurm_find_preemptable_jobs(job_record_t *job_ptr)
 		error("%s: %pJ not pending", __func__, job_ptr);
 		return NULL;
 	}
-	if (job_ptr->part_ptr == NULL) {
+	if (!job_ptr->part_ptr) {
 		error("%s: %pJ has NULL partition ptr", __func__, job_ptr);
 		return NULL;
 	}
-	if (job_ptr->part_ptr->node_bitmap == NULL) {
+	if (!job_ptr->part_ptr->node_bitmap) {
 		error("%s: partition %s node_bitmap=NULL",
 		      __func__, job_ptr->part_ptr->name);
 		return NULL;
@@ -257,12 +332,43 @@ extern List slurm_find_preemptable_jobs(job_record_t *job_ptr)
  */
 extern uint16_t slurm_job_preempt_mode(job_record_t *job_ptr)
 {
-	uint16_t data = (uint16_t)PREEMPT_MODE_OFF;
+	uint16_t data;
 
-	if ((slurm_preempt_init() < 0) ||
-	    ((*(ops.get_data))(job_ptr, PREEMPT_DATA_MODE, &data) !=
-	     SLURM_SUCCESS))
-		return data;
+	if (job_ptr->pack_job_list && !job_ptr->job_preempt_comp) {
+		/*
+		 * Find the component job to use as the template for
+		 * setting the preempt mode for all other components.
+		 * The first component job found having a preempt mode
+		 * in the hierarchy (ordered highest to lowest:
+		 * SUSPEND->REQUEUE->CANCEL) will be used as
+		 * the template.
+		 *
+		 * NOTE: CANCEL is not on the list below since it is handled
+		 * as the default.
+		 */
+		static const uint16_t preempt_modes[] = {
+			PREEMPT_MODE_SUSPEND,
+			PREEMPT_MODE_REQUEUE
+		};
+		static const int preempt_modes_cnt = sizeof(preempt_modes) /
+			sizeof(preempt_modes[0]);
+
+		for (int pm_index = 0; pm_index < preempt_modes_cnt;
+		     pm_index++) {
+			data = preempt_modes[pm_index];
+			if ((job_ptr->job_preempt_comp = list_find_first(
+				     job_ptr->pack_job_list,
+				     _find_job_by_preempt_mode,
+				     &data)))
+				break;
+		}
+		/* if not found look up the mode (CANCEL expected) */
+		if (!job_ptr->job_preempt_comp)
+			data = _job_preempt_mode_internal(job_ptr);
+	} else
+		data = _job_preempt_mode_internal(job_ptr->job_preempt_comp ?
+						  job_ptr->job_preempt_comp :
+						  job_ptr);
 
 	return data;
 }

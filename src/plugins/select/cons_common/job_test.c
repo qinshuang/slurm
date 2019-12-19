@@ -42,6 +42,14 @@
 
 #include "src/slurmctld/preempt.h"
 
+typedef struct {
+	int action;
+	bool job_fini;
+	bitstr_t *node_map;
+	node_use_record_t *node_usage;
+	part_res_record_t *part_record_ptr;
+} wrapper_rm_job_args_t;
+
 uint64_t def_cpu_per_gpu = 0;
 uint64_t def_mem_per_gpu = 0;
 bool preempt_strict_order = false;
@@ -1722,6 +1730,43 @@ static int _test_only(job_record_t *job_ptr, bitstr_t *node_bitmap,
 	return rc;
 }
 
+
+static int _wrapper_job_res_rm_job(void *x, void *arg)
+{
+	job_record_t *job_ptr = (job_record_t *)x;
+	wrapper_rm_job_args_t *wargs = (wrapper_rm_job_args_t *)arg;
+
+	(void)job_res_rm_job(wargs->part_record_ptr, wargs->node_usage,
+			     job_ptr, wargs->action, wargs->job_fini,
+			     wargs->node_map);
+	return 0;
+}
+
+static void _job_res_rm_job(part_res_record_t *part_record_ptr,
+			    node_use_record_t *node_usage,
+			    job_record_t *job_ptr, int action, bool job_fini,
+			    bitstr_t *node_map)
+{
+	wrapper_rm_job_args_t wargs;
+
+	if (!job_ptr->pack_job_list) {
+		(void) job_res_rm_job(
+			part_record_ptr, node_usage, job_ptr,
+			action, job_fini, node_map);
+		return;
+	}
+
+	memset(&wargs, 0, sizeof(wargs));
+	wargs.action = action;
+	wargs.job_fini = job_fini;
+	wargs.node_usage = node_usage;
+	wargs.part_record_ptr = part_record_ptr;
+	wargs.node_map = node_map;
+
+	(void) list_for_each(job_ptr->pack_job_list, _wrapper_job_res_rm_job,
+			     &wargs);
+}
+
 /*
  * Determine where and when the job at job_ptr can begin execution by updating
  * a scratch cr_record structure to reflect each job terminating at the
@@ -1820,9 +1865,9 @@ static int _will_run_test(job_record_t *job_ptr, bitstr_t *node_bitmap,
 			} else
 				action = 0;	/* remove cores and memory */
 			/* Remove preemptable job now */
-			(void) job_res_rm_job(future_part, future_usage,
-					      tmp_job_ptr, action, false,
-					      orig_map);
+			_job_res_rm_job(future_part, future_usage,
+					tmp_job_ptr, action, false,
+					orig_map);
 		}
 	}
 	list_iterator_destroy(job_iterator);
@@ -2041,7 +2086,7 @@ top:	orig_node_map = bit_copy(save_node_map);
 					 tmp_job_ptr->node_bitmap))
 				continue;
 			/* Remove preemptable job now */
-			(void) job_res_rm_job(future_part, future_usage,
+			(void)_job_res_rm_job(future_part, future_usage,
 					      tmp_job_ptr, 0, false,
 					      orig_node_map);
 			bit_or(node_bitmap, orig_node_map);
