@@ -458,6 +458,71 @@ static bool _check_jobs_before_remove_without_assoctable(
 /* 	return SLURM_SUCCESS; */
 /* } */
 
+/*
+ * This alter was put in in 20.02. Two versions after this this can be removed.
+ */
+static int _alter_pack_job_columns(mysql_conn_t *mysql_conn, char *table)
+{
+	MYSQL_ROW row;
+	MYSQL_RES *result = NULL;
+	char *query = NULL;
+	int rc = SLURM_SUCCESS;
+
+	query = xstrdup_printf("show columns from %s "
+			       "where field like 'pack_%%';",
+			       table);
+
+	debug4("(%s:%d) query\n%s", THIS_FILE, __LINE__, query);
+	if (!(result = mysql_db_query_ret(mysql_conn, query, 0))) {
+		xfree(query);
+		return SLURM_ERROR;
+	}
+	xfree(query);
+
+	while ((row = mysql_fetch_row(result))) {
+		char *new_char = xstrdup(row[0]);
+		xstrsubstitute(new_char, "pack", "het");
+		query = xstrdup_printf("alter table %s change %s %s "
+				       "int unsigned not null",
+				       table, row[0], new_char);
+		xfree(new_char);
+		debug4("(%s:%d) query\n%s", THIS_FILE, __LINE__, query);
+		if ((rc = mysql_db_query(mysql_conn, query)) != SLURM_SUCCESS)
+			error("Can't update %s %m", table);
+		xfree(query);
+	}
+
+	query = xstrdup_printf("show index from %s "
+			       "where key_name like 'pack%%';",
+			       table);
+
+	debug4("(%s:%d) query\n%s", THIS_FILE, __LINE__, query);
+	if (!(result = mysql_db_query_ret(mysql_conn, query, 0))) {
+		xfree(query);
+		return SLURM_ERROR;
+	}
+	xfree(query);
+	mysql_free_result(result);
+
+	query = xstrdup_printf("alter table %s drop key pack_job;", table);
+	debug4("(%s:%d) query\n%s", THIS_FILE, __LINE__, query);
+	if ((rc = mysql_db_query(mysql_conn, query)) != SLURM_SUCCESS) {
+		error("Can't update %s %m", table);
+		xfree(query);
+		return SLURM_ERROR;
+	}
+	xfree(query);
+
+	query = xstrdup_printf("alter table %s add key het_job (het_job_id);",
+			       table);
+	debug4("(%s:%d) query\n%s", THIS_FILE, __LINE__, query);
+	if ((rc = mysql_db_query(mysql_conn, query)) != SLURM_SUCCESS)
+		error("Can't update %s %m", table);
+	xfree(query);
+
+	return rc;
+}
+
 /* Any time a new table is added set it up here */
 static int _as_mysql_acct_check_tables(mysql_conn_t *mysql_conn)
 {
@@ -1286,8 +1351,8 @@ extern int create_cluster_tables(mysql_conn_t *mysql_conn, char *cluster_name)
 		{ "id_wckey", "int unsigned not null" },
 		{ "id_user", "int unsigned not null" },
 		{ "id_group", "int unsigned not null" },
-		{ "pack_job_id", "int unsigned not null" },
-		{ "pack_job_offset", "int unsigned not null" },
+		{ "het_job_id", "int unsigned not null" },
+		{ "het_job_offset", "int unsigned not null" },
 		{ "kill_requid", "int default -1 not null" },
 		{ "state_reason_prev", "int unsigned not null" },
 		{ "mcs_label", "tinytext default ''" },
@@ -1474,6 +1539,9 @@ extern int create_cluster_tables(mysql_conn_t *mysql_conn, char *cluster_name)
 
 	snprintf(table_name, sizeof(table_name), "\"%s_%s\"",
 		 cluster_name, job_table);
+
+	_alter_pack_job_columns(mysql_conn, table_name);
+
 	/*
 	 * sacct_def is the index for query's with state as time_start is used
 	 * in these queries. sacct_def2 is for plain sacct queries.
@@ -1490,7 +1558,7 @@ extern int create_cluster_tables(mysql_conn_t *mysql_conn, char *cluster_name)
 				  "key qos (id_qos), "
 				  "key association (id_assoc), "
 				  "key array_job (id_array_job), "
-				  "key pack_job (pack_job_id), "
+				  "key het_job (het_job_id), "
 				  "key reserv (id_resv), "
 				  "key sacct_def (id_user, time_start, "
 				  "time_end), "
