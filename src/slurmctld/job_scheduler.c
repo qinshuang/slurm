@@ -1974,7 +1974,7 @@ extern int sort_job_queue2(void *x, void *y)
 {
 	job_queue_rec_t *job_rec1 = *(job_queue_rec_t **) x;
 	job_queue_rec_t *job_rec2 = *(job_queue_rec_t **) y;
-	pack_details_t *details = NULL;
+	het_job_details_t *details = NULL;
 	bool has_resv1, has_resv2;
 	static time_t config_update = 0;
 	static bool preemption_enabled = true;
@@ -1997,7 +1997,7 @@ extern int sort_job_queue2(void *x, void *y)
 	if (bf_hetjob_prio && job_rec1->job_ptr->pack_job_id &&
 	    (job_rec1->job_ptr->pack_job_id !=
 	     job_rec2->job_ptr->pack_job_id)) {
-		if ((details = job_rec1->job_ptr->pack_details))
+		if ((details = job_rec1->job_ptr->het_details))
 			has_resv1 = details->any_resv;
 		else
 			has_resv1 = (job_rec1->job_ptr->resv_id != 0) ||
@@ -2009,7 +2009,7 @@ extern int sort_job_queue2(void *x, void *y)
 	if (bf_hetjob_prio && job_rec2->job_ptr->pack_job_id &&
 	    (job_rec2->job_ptr->pack_job_id !=
 	     job_rec1->job_ptr->pack_job_id)) {
-		if ((details = job_rec2->job_ptr->pack_details))
+		if ((details = job_rec2->job_ptr->het_details))
 			has_resv2 = details->any_resv;
 		else
 			has_resv2 = (job_rec2->job_ptr->resv_id != 0) ||
@@ -2027,7 +2027,7 @@ extern int sort_job_queue2(void *x, void *y)
 		if (bf_hetjob_prio && job_rec1->job_ptr->pack_job_id &&
 		    (job_rec1->job_ptr->pack_job_id !=
 		     job_rec2->job_ptr->pack_job_id)) {
-			if ((details = job_rec1->job_ptr->pack_details))
+			if ((details = job_rec1->job_ptr->het_details))
 				p1 = details->priority_tier;
 			else
 				p1 = job_rec1->part_ptr->priority_tier;
@@ -2037,7 +2037,7 @@ extern int sort_job_queue2(void *x, void *y)
 		if (bf_hetjob_prio && job_rec2->job_ptr->pack_job_id &&
 		    (job_rec2->job_ptr->pack_job_id !=
 		     job_rec1->job_ptr->pack_job_id)) {
-			if ((details = job_rec2->job_ptr->pack_details))
+			if ((details = job_rec2->job_ptr->het_details))
 				p2 = details->priority_tier;
 			else
 				p2 = job_rec2->part_ptr->priority_tier;
@@ -2053,7 +2053,7 @@ extern int sort_job_queue2(void *x, void *y)
 	if (bf_hetjob_prio && job_rec1->job_ptr->pack_job_id &&
 	    (job_rec1->job_ptr->pack_job_id !=
 	     job_rec2->job_ptr->pack_job_id)) {
-		if ((details = job_rec1->job_ptr->pack_details))
+		if ((details = job_rec1->job_ptr->het_details))
 			p1 = details->priority;
 		else {
 			if (job_rec1->job_ptr->part_ptr_list &&
@@ -2073,7 +2073,7 @@ extern int sort_job_queue2(void *x, void *y)
 	if (bf_hetjob_prio && job_rec2->job_ptr->pack_job_id &&
 	    (job_rec2->job_ptr->pack_job_id !=
 	     job_rec1->job_ptr->pack_job_id)) {
-		if ((details = job_rec2->job_ptr->pack_details))
+		if ((details = job_rec2->job_ptr->het_details))
 			p2 = details->priority;
 		else {
 			if (job_rec2->job_ptr->part_ptr_list &&
