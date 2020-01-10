@@ -1293,9 +1293,9 @@ static void _dump_job_state(job_record_t *dump_job_ptr, Buf buffer)
 	pack64(dump_job_ptr->db_index, buffer);
 	pack32(dump_job_ptr->resv_id, buffer);
 	pack32(dump_job_ptr->next_step_id, buffer);
-	pack32(dump_job_ptr->pack_job_id, buffer);
-	packstr(dump_job_ptr->pack_job_id_set, buffer);
-	pack32(dump_job_ptr->pack_job_offset, buffer);
+	pack32(dump_job_ptr->het_job_id, buffer);
+	packstr(dump_job_ptr->het_job_id_set, buffer);
+	pack32(dump_job_ptr->het_job_offset, buffer);
 	pack32(dump_job_ptr->qos_id, buffer);
 	pack32(dump_job_ptr->req_switch, buffer);
 	pack32(dump_job_ptr->wait4switch, buffer);
@@ -2325,11 +2325,11 @@ static int _load_job_state(Buf buffer, uint16_t protocol_version)
 	}
 	job_ptr->other_port   = other_port;
 	job_ptr->power_flags  = power_flags;
-	job_ptr->pack_job_id     = pack_job_id;
-	xfree(job_ptr->pack_job_id_set);
-	job_ptr->pack_job_id_set = pack_job_id_set;
+	job_ptr->het_job_id     = pack_job_id;
+	xfree(job_ptr->het_job_id_set);
+	job_ptr->het_job_id_set = pack_job_id_set;
 	pack_job_id_set       = NULL;	/* reused, nothing left to free */
-	job_ptr->pack_job_offset = pack_job_offset;
+	job_ptr->het_job_offset = pack_job_offset;
 	xfree(job_ptr->partition);
 	job_ptr->partition    = partition;
 	partition             = NULL;	/* reused, nothing left to free */
@@ -3303,19 +3303,19 @@ extern job_record_t *find_job_pack_record(uint32_t job_id, uint32_t pack_id)
 	}
 	if (!pack_leader)
 		return NULL;
-	if (pack_leader->pack_job_offset == pack_id)
+	if (pack_leader->het_job_offset == pack_id)
 		return pack_leader;
 
-	if (!pack_leader->pack_job_list)
+	if (!pack_leader->het_job_list)
 		return NULL;
-	iter = list_iterator_create(pack_leader->pack_job_list);
+	iter = list_iterator_create(pack_leader->het_job_list);
 	while ((pack_job = list_next(iter))) {
-		if (pack_leader->pack_job_id != pack_job->pack_job_id) {
-			error("%s: Bad pack_job_list for %pJ",
+		if (pack_leader->het_job_id != pack_job->het_job_id) {
+			error("%s: Bad het_job_list for %pJ",
 			      __func__, pack_leader);
 			continue;
 		}
-		if (pack_job->pack_job_offset == pack_id)
+		if (pack_job->het_job_offset == pack_id)
 			break;
 	}
 	list_iterator_destroy(iter);
@@ -3501,13 +3501,13 @@ extern int kill_job_step(job_step_kill_msg_t *job_step_kill_msg, uint32_t uid)
 
 	lock_slurmctld(job_read_lock);
 	job_ptr = find_job_record(job_step_kill_msg->job_id);
-	if (job_ptr && job_ptr->pack_job_list &&
+	if (job_ptr && job_ptr->het_job_list &&
 	    (job_step_kill_msg->signal == SIGKILL) &&
 	    (job_step_kill_msg->job_step_id != SLURM_BATCH_SCRIPT)) {
-		cnt = list_count(job_ptr->pack_job_list);
+		cnt = list_count(job_ptr->het_job_list);
 		pack_job_ids = xcalloc(cnt, sizeof(uint32_t));
 		i = 0;
-		iter = list_iterator_create(job_ptr->pack_job_list);
+		iter = list_iterator_create(job_ptr->het_job_list);
 		while ((job_pack_ptr = list_next(iter))) {
 			pack_job_ids[i++] = job_pack_ptr->job_id;
 		}
@@ -3857,22 +3857,22 @@ static bool _pack_job_on_node(job_record_t *job_ptr, int node_inx)
 	ListIterator iter;
 	static bool result = false;
 
-	if (!job_ptr->pack_job_id)
+	if (!job_ptr->het_job_id)
 		return _job_node_test(job_ptr, node_inx);
 
-	pack_leader = find_job_record(job_ptr->pack_job_id);
+	pack_leader = find_job_record(job_ptr->het_job_id);
 	if (!pack_leader) {
 		error("%s: Job pack leader %pJ not found",
 		      __func__, job_ptr);
 		return _job_node_test(job_ptr, node_inx);
 	}
-	if (!pack_leader->pack_job_list) {
+	if (!pack_leader->het_job_list) {
 		error("%s: Job pack leader %pJ job list is NULL",
 		      __func__, job_ptr);
 		return _job_node_test(job_ptr, node_inx);
 	}
 
-	iter = list_iterator_create(pack_leader->pack_job_list);
+	iter = list_iterator_create(pack_leader->het_job_list);
 	while ((pack_job = list_next(iter))) {
 		if ((result = _job_node_test(pack_job, node_inx)))
 			break;
@@ -5218,24 +5218,24 @@ extern int job_fail(uint32_t job_id, uint32_t job_state)
 		return ESLURM_INVALID_JOB_ID;
 	}
 
-	if (job_ptr->pack_job_id == 0)
+	if (job_ptr->het_job_id == 0)
 		return _job_fail(job_ptr, job_state);
 
-	pack_leader = find_job_record(job_ptr->pack_job_id);
+	pack_leader = find_job_record(job_ptr->het_job_id);
 	if (!pack_leader) {
 		error("%s: Job pack leader %pJ not found",
 		      __func__, job_ptr);
 		return _job_fail(job_ptr, job_state);
 	}
-	if (!pack_leader->pack_job_list) {
+	if (!pack_leader->het_job_list) {
 		error("%s: Job pack leader %pJ job list is NULL",
 		      __func__, job_ptr);
 		return _job_fail(job_ptr, job_state);
 	}
 
-	iter = list_iterator_create(pack_leader->pack_job_list);
+	iter = list_iterator_create(pack_leader->het_job_list);
 	while ((pack_job = list_next(iter))) {
-		if (pack_leader->pack_job_id != pack_job->pack_job_id) {
+		if (pack_leader->het_job_id != pack_job->het_job_id) {
 			error("%s: Bad pack_job_list for %pJ",
 			      __func__, pack_leader);
 			continue;
@@ -5481,9 +5481,9 @@ extern int pack_job_signal(job_record_t *pack_leader, uint16_t signal,
 	int rc = SLURM_SUCCESS, rc1;
 	job_record_t *pack_job;
 
-	iter = list_iterator_create(pack_leader->pack_job_list);
+	iter = list_iterator_create(pack_leader->het_job_list);
 	while ((pack_job = list_next(iter))) {
-		if (pack_leader->pack_job_id != pack_job->pack_job_id) {
+		if (pack_leader->het_job_id != pack_job->het_job_id) {
 			error("%s: Bad pack_job_list for %pJ",
 			      __func__, pack_leader);
 			continue;
@@ -5591,21 +5591,21 @@ extern int job_str_signal(char *job_id_str, uint16_t signal, uint16_t flags,
 			      job_ptr, uid);
 			return ESLURM_ACCESS_DENIED;
 		}
-		if (job_ptr && job_ptr->pack_job_list) {   /* Pack leader */
+		if (job_ptr && job_ptr->het_job_list) {   /* Pack leader */
 			return pack_job_signal(job_ptr, signal, flags, uid,
 						preempt);
 		}
-		if (job_ptr && job_ptr->pack_job_id && _get_whole_hetjob()) {
+		if (job_ptr && job_ptr->het_job_id && _get_whole_hetjob()) {
 			job_record_t *pack_leader;
-			pack_leader = find_job_record(job_ptr->pack_job_id);
-			if (pack_leader && pack_leader->pack_job_list) {
+			pack_leader = find_job_record(job_ptr->het_job_id);
+			if (pack_leader && pack_leader->het_job_list) {
 				return pack_job_signal(pack_leader, signal,
 						       flags, uid, preempt);
 			}
 			error("%s: Job pack leader %pJ not found",
 			      __func__, job_ptr);
 		}
-		if (job_ptr && job_ptr->pack_job_id && IS_JOB_PENDING(job_ptr))
+		if (job_ptr && job_ptr->het_job_id && IS_JOB_PENDING(job_ptr))
 			return ESLURM_NOT_PACK_WHOLE;	/* Pack job child */
 		if (job_ptr && (job_ptr->array_task_id == NO_VAL) &&
 		    (job_ptr->array_recs == NULL)) {
@@ -6124,12 +6124,12 @@ extern int job_complete(uint32_t job_id, uid_t uid, bool requeue,
 		return ESLURM_USER_ID_MISSING;
 	}
 
-	if (job_ptr->pack_job_list) {
+	if (job_ptr->het_job_list) {
 		rc = SLURM_SUCCESS;
-		iter = list_iterator_create(job_ptr->pack_job_list);
+		iter = list_iterator_create(job_ptr->het_job_list);
 		while ((job_pack_ptr = list_next(iter))) {
-			if (job_ptr->pack_job_id != job_pack_ptr->pack_job_id) {
-				error("%s: Bad pack_job_list for %pJ",
+			if (job_ptr->het_job_id != job_pack_ptr->het_job_id) {
+				error("%s: Bad het_job_list for %pJ",
 				      __func__, job_ptr);
 				continue;
 			}
@@ -8507,26 +8507,26 @@ static void _pack_time_limit_incr(job_record_t *job_ptr, uint32_t boot_job_id)
 	job_record_t *pack_leader, *pack_job;
 	ListIterator iter;
 
-	if (!job_ptr->pack_job_id) {
+	if (!job_ptr->het_job_id) {
 		_job_time_limit_incr(job_ptr, boot_job_id);
 		return;
 	}
 
-	pack_leader = find_job_record(job_ptr->pack_job_id);
+	pack_leader = find_job_record(job_ptr->het_job_id);
 	if (!pack_leader) {
 		error("%s: Job pack leader %pJ not found",
 		      __func__, job_ptr);
 		_job_time_limit_incr(job_ptr, boot_job_id);
 		return;
 	}
-	if (!pack_leader->pack_job_list) {
+	if (!pack_leader->het_job_list) {
 		error("%s: Job pack leader %pJ job list is NULL",
 		      __func__, job_ptr);
 		_job_time_limit_incr(job_ptr, boot_job_id);
 		return;
 	}
 
-	iter = list_iterator_create(pack_leader->pack_job_list);
+	iter = list_iterator_create(pack_leader->het_job_list);
 	while ((pack_job = list_next(iter))) {
 		_job_time_limit_incr(pack_job, boot_job_id);
 	}
@@ -8603,21 +8603,21 @@ static bool _pack_configuring_test(job_record_t *job_ptr)
 
 	if (IS_JOB_CONFIGURING(job_ptr))
 		return true;
-	if (!job_ptr->pack_job_id)
+	if (!job_ptr->het_job_id)
 		return false;
 
-	pack_leader = find_job_record(job_ptr->pack_job_id);
+	pack_leader = find_job_record(job_ptr->het_job_id);
 	if (!pack_leader) {
 		error("%s: Job pack leader %pJ not found", __func__, job_ptr);
 		return false;
 	}
-	if (!pack_leader->pack_job_list) {
+	if (!pack_leader->het_job_list) {
 		error("%s: Job pack leader %pJ job list is NULL",
 		      __func__, job_ptr);
 		return false;
 	}
 
-	iter = list_iterator_create(pack_leader->pack_job_list);
+	iter = list_iterator_create(pack_leader->het_job_list);
 	while ((pack_job = list_next(iter))) {
 		if (IS_JOB_CONFIGURING(pack_job)) {
 			result = true;
@@ -9320,15 +9320,15 @@ static void _list_delete_job(void *job_entry)
 	xfree(job_ptr->nodes);
 	xfree(job_ptr->nodes_completing);
 	xfree(job_ptr->origin_cluster);
-	if (job_ptr->het_details && job_ptr->pack_job_id) {
+	if (job_ptr->het_details && job_ptr->het_job_id) {
 		/* xfree struct if hetjob leader and NULL ptr otherwise. */
-		if (job_ptr->pack_job_offset == 0)
+		if (job_ptr->het_job_offset == 0)
 			xfree(job_ptr->het_details);
 		else
 			job_ptr->het_details = NULL;
 	}
-	xfree(job_ptr->pack_job_id_set);
-	FREE_NULL_LIST(job_ptr->pack_job_list);
+	xfree(job_ptr->het_job_id_set);
+	FREE_NULL_LIST(job_ptr->het_job_list);
 	xfree(job_ptr->partition);
 	FREE_NULL_LIST(job_ptr->part_ptr_list);
 	xfree(job_ptr->priority_array);
@@ -9394,7 +9394,7 @@ static int _list_find_job_old(void *job_entry, void *key)
 	job_record_t *job_ptr = (job_record_t *) job_entry;
 	uint16_t cleaning = 0;
 
-	if (key && job_ptr->pack_job_id)
+	if (key && job_ptr->het_job_id)
 		return 0;
 
 	if (IS_JOB_COMPLETING(job_ptr) && !LOTS_OF_AGENTS) {
@@ -9678,14 +9678,14 @@ static int _pack_hetero_job(job_record_t *job_ptr, uint16_t show_flags,
 	int job_cnt = 0;
 	ListIterator iter;
 
-	iter = list_iterator_create(job_ptr->pack_job_list);
+	iter = list_iterator_create(job_ptr->het_job_list);
 	while ((pack_ptr = list_next(iter))) {
-		if (pack_ptr->pack_job_id == job_ptr->pack_job_id) {
+		if (pack_ptr->het_job_id == job_ptr->het_job_id) {
 			pack_job(pack_ptr, show_flags, buffer, protocol_version,
 				 uid);
 			job_cnt++;
 		} else {
-			error("%s: Bad pack_job_list for %pJ",
+			error("%s: Bad het_job_list for %pJ",
 			      __func__, job_ptr);
 		}
 	}
@@ -9725,7 +9725,7 @@ extern int pack_one_job(char **buffer_ptr, int *buffer_size,
 	pack_time(time(NULL), buffer);
 
 	job_ptr = find_job_record(job_id);
-	if (job_ptr && job_ptr->pack_job_list) {
+	if (job_ptr && job_ptr->het_job_list) {
 		/* Pack heterogeneous job components */
 		if (!_hide_job(job_ptr, uid, show_flags)) {
 			jobs_packed = _pack_hetero_job(job_ptr, show_flags,
@@ -9846,9 +9846,9 @@ void pack_job(job_record_t *dump_job_ptr, uint16_t show_flags, Buf buffer,
 		pack32(dump_job_ptr->job_id,   buffer);
 		pack32(dump_job_ptr->user_id,  buffer);
 		pack32(dump_job_ptr->group_id, buffer);
-		pack32(dump_job_ptr->pack_job_id, buffer);
-		packstr(dump_job_ptr->pack_job_id_set, buffer);
-		pack32(dump_job_ptr->pack_job_offset, buffer);
+		pack32(dump_job_ptr->het_job_id, buffer);
+		packstr(dump_job_ptr->het_job_id_set, buffer);
+		pack32(dump_job_ptr->het_job_offset, buffer);
 		pack32(dump_job_ptr->profile,  buffer);
 
 		pack32(dump_job_ptr->job_state,    buffer);
@@ -10080,9 +10080,9 @@ void pack_job(job_record_t *dump_job_ptr, uint16_t show_flags, Buf buffer,
 		pack32(dump_job_ptr->job_id,   buffer);
 		pack32(dump_job_ptr->user_id,  buffer);
 		pack32(dump_job_ptr->group_id, buffer);
-		pack32(dump_job_ptr->pack_job_id, buffer);
-		packstr(dump_job_ptr->pack_job_id_set, buffer);
-		pack32(dump_job_ptr->pack_job_offset, buffer);
+		pack32(dump_job_ptr->het_job_id, buffer);
+		packstr(dump_job_ptr->het_job_id_set, buffer);
+		pack32(dump_job_ptr->het_job_offset, buffer);
 		pack32(dump_job_ptr->profile,  buffer);
 
 		pack32(dump_job_ptr->job_state,    buffer);
@@ -10300,9 +10300,9 @@ void pack_job(job_record_t *dump_job_ptr, uint16_t show_flags, Buf buffer,
 		pack32(dump_job_ptr->job_id,   buffer);
 		pack32(dump_job_ptr->user_id,  buffer);
 		pack32(dump_job_ptr->group_id, buffer);
-		pack32(dump_job_ptr->pack_job_id, buffer);
-		packstr(dump_job_ptr->pack_job_id_set, buffer);
-		pack32(dump_job_ptr->pack_job_offset, buffer);
+		pack32(dump_job_ptr->het_job_id, buffer);
+		packstr(dump_job_ptr->het_job_id_set, buffer);
+		pack32(dump_job_ptr->het_job_offset, buffer);
 		pack32(dump_job_ptr->profile,  buffer);
 
 		pack32(dump_job_ptr->job_state,    buffer);
@@ -10754,7 +10754,7 @@ static int _purge_pack_job_filter(void *x, void *key)
 {
 	job_record_t *job_ptr = (job_record_t *) x;
 	job_record_t *job_filter = (job_record_t *) key;
-	if (job_ptr->pack_job_id == job_filter->pack_job_id)
+	if (job_ptr->het_job_id == job_filter->het_job_id)
 		return 1;
 	return 0;
 }
@@ -10770,14 +10770,14 @@ static inline bool _purge_complete_pack_job(job_record_t *pack_leader)
 	bool incomplete_job = false;
 	int i;
 
-	if (!pack_leader->pack_job_list)
+	if (!pack_leader->het_job_list)
 		return false;		/* Not pack leader */
 	if (!IS_JOB_FINISHED(pack_leader))
 		return false;		/* Pack leader incomplete */
 
-	iter = list_iterator_create(pack_leader->pack_job_list);
+	iter = list_iterator_create(pack_leader->het_job_list);
 	while ((pack_job = list_next(iter))) {
-		if (pack_leader->pack_job_id != pack_job->pack_job_id) {
+		if (pack_leader->het_job_id != pack_job->het_job_id) {
 			error("%s: Bad pack_job_list for %pJ",
 			      __func__, pack_leader);
 			continue;
@@ -10792,7 +10792,7 @@ static inline bool _purge_complete_pack_job(job_record_t *pack_leader)
 	if (incomplete_job)
 		return false;
 
-	purge_job_rec.pack_job_id = pack_leader->pack_job_id;
+	purge_job_rec.het_job_id = pack_leader->het_job_id;
 	i = list_delete_all(job_list, &_purge_pack_job_filter, &purge_job_rec);
 	if (i) {
 		debug2("%s: purged %d old job records", __func__, i);
@@ -11421,10 +11421,10 @@ static void _hold_job(job_record_t *job_ptr, uid_t uid)
 	job_record_t *pack_leader = NULL, *pack_job;
 	ListIterator iter;
 
-	if (job_ptr->pack_job_id && _get_whole_hetjob())
-		pack_leader = find_job_record(job_ptr->pack_job_id);
-	if (pack_leader && pack_leader->pack_job_list) {
-		iter = list_iterator_create(pack_leader->pack_job_list);
+	if (job_ptr->het_job_id && _get_whole_hetjob())
+		pack_leader = find_job_record(job_ptr->het_job_id);
+	if (pack_leader && pack_leader->het_job_list) {
+		iter = list_iterator_create(pack_leader->het_job_list);
 		while ((pack_job = list_next(iter)))
 			_hold_job_rec(pack_job, uid);
 		list_iterator_destroy(iter);
@@ -11452,10 +11452,10 @@ static void _release_job(job_record_t *job_ptr, uid_t uid)
 	job_record_t *pack_leader = NULL, *pack_job;
 	ListIterator iter;
 
-	if (job_ptr->pack_job_id && _get_whole_hetjob())
-		pack_leader = find_job_record(job_ptr->pack_job_id);
-	if (pack_leader && pack_leader->pack_job_list) {
-		iter = list_iterator_create(pack_leader->pack_job_list);
+	if (job_ptr->het_job_id && _get_whole_hetjob())
+		pack_leader = find_job_record(job_ptr->het_job_id);
+	if (pack_leader && pack_leader->het_job_list) {
+		iter = list_iterator_create(pack_leader->het_job_list);
 		while ((pack_job = list_next(iter)))
 			_release_job_rec(pack_job, uid);
 		list_iterator_destroy(iter);
@@ -13966,12 +13966,12 @@ extern int update_job_str(slurm_msg_t *msg, uid_t uid)
 	if (end_ptr[0] == '\0') {	/* Single job (or full job array) */
 		job_record_t *job_ptr_done = NULL;
 		job_ptr = find_job_record(job_id);
-		if (job_ptr && job_ptr->pack_job_list) {
-			iter = list_iterator_create(job_ptr->pack_job_list);
+		if (job_ptr && job_ptr->het_job_list) {
+			iter = list_iterator_create(job_ptr->het_job_list);
 			while ((pack_job = list_next(iter))) {
-				if (job_ptr->pack_job_id !=
-				    pack_job->pack_job_id) {
-					error("%s: Bad pack_job_list for %pJ",
+				if (job_ptr->het_job_id !=
+				    pack_job->het_job_id) {
+					error("%s: Bad het_job_list for %pJ",
 					      __func__, job_ptr);
 					continue;
 				}
@@ -14194,7 +14194,7 @@ static void _send_job_kill(job_record_t *job_ptr)
 	kill_job->job_gres_info	=
 		gres_plugin_epilog_build_env(job_ptr->gres_list,job_ptr->nodes);
 	kill_job->job_id    = job_ptr->job_id;
-	kill_job->pack_jobid = job_ptr->pack_job_id;
+	kill_job->pack_jobid = job_ptr->het_job_id;
 	kill_job->step_id   = NO_VAL;
 	kill_job->job_state = job_ptr->job_state;
 	kill_job->job_uid   = job_ptr->user_id;
@@ -14526,7 +14526,7 @@ static void _purge_missing_jobs(int node_inx, time_t now)
 			startup_time = batch_startup_time;
 
 		if ((job_ptr->batch_flag != 0)			&&
-		    (job_ptr->pack_job_offset == 0)		&&
+		    (job_ptr->het_job_offset == 0)		&&
 		    (job_ptr->time_last_active < startup_time)	&&
 		    (job_ptr->start_time       < startup_time)	&&
 		    (node_ptr == find_node_record(job_ptr->batch_host))) {
@@ -14621,7 +14621,7 @@ extern void abort_job_on_node(uint32_t job_id, job_record_t *job_ptr,
 		kill_req->job_gres_info	=
 			gres_plugin_epilog_build_env(job_ptr->gres_list,
 						     job_ptr->nodes);
-		kill_req->pack_jobid	= job_ptr->pack_job_id;
+		kill_req->pack_jobid	= job_ptr->het_job_id;
 		kill_req->start_time = job_ptr->start_time;
 		kill_req->select_jobinfo =
 			select_g_select_jobinfo_copy(job_ptr->select_jobinfo);
@@ -14710,7 +14710,7 @@ extern void abort_job_on_nodes(job_record_t *job_ptr,
 		kill_req->step_id	= NO_VAL;
 		kill_req->time          = time(NULL);
 		kill_req->nodes		= bitmap2node_name(tmp_node_bitmap);
-		kill_req->pack_jobid	= job_ptr->pack_job_id;
+		kill_req->pack_jobid	= job_ptr->het_job_id;
 		kill_req->start_time	= job_ptr->start_time;
 		kill_req->select_jobinfo =
 			select_g_select_jobinfo_copy(job_ptr->select_jobinfo);
@@ -14745,7 +14745,7 @@ extern void kill_job_on_node(job_record_t *job_ptr,
 	kill_req = xmalloc(sizeof(kill_job_msg_t));
 	kill_req->job_gres_info	=
 		gres_plugin_epilog_build_env(job_ptr->gres_list,job_ptr->nodes);
-	kill_req->pack_jobid	= job_ptr->pack_job_id;
+	kill_req->pack_jobid	= job_ptr->het_job_id;
 	kill_req->job_id	= job_ptr->job_id;
 	kill_req->step_id	= NO_VAL;
 	kill_req->time          = time(NULL);
@@ -14792,10 +14792,10 @@ static bool _job_all_finished(job_record_t *job_ptr)
 	if (!IS_JOB_FINISHED(job_ptr))
 		return false;
 
-	if (!job_ptr->pack_job_list)
+	if (!job_ptr->het_job_list)
 		return true;
 
-	iter = list_iterator_create(job_ptr->pack_job_list);
+	iter = list_iterator_create(job_ptr->het_job_list);
 	while ((pack_job = list_next(iter))) {
 		if (!IS_JOB_FINISHED(pack_job)) {
 			finished = false;
@@ -14953,7 +14953,7 @@ static int _test_state_dir_flag(void *x, void *arg)
 	}
 
 	if (!job_ptr->batch_flag || !IS_JOB_PENDING(job_ptr) ||
-	    (job_ptr->pack_job_offset > 0))
+	    (job_ptr->het_job_offset > 0))
 		return 0;	/* No files expected */
 
 	error("Script for %pJ lost, state set to FAILED", job_ptr);
@@ -16139,17 +16139,17 @@ static int _job_suspend(job_record_t *job_ptr, uint16_t op, bool indf_susp)
 	int rc = SLURM_SUCCESS, rc1;
 	ListIterator iter;
 
-	if (job_ptr->pack_job_id && !job_ptr->pack_job_list)
+	if (job_ptr->het_job_id && !job_ptr->het_job_list)
 		return ESLURM_NOT_PACK_WHOLE;
 
 	/* Notify salloc/srun of suspend/resume */
 	srun_job_suspend(job_ptr, op);
 
-	if (job_ptr->pack_job_list) {
-		iter = list_iterator_create(job_ptr->pack_job_list);
+	if (job_ptr->het_job_list) {
+		iter = list_iterator_create(job_ptr->het_job_list);
 		while ((pack_job = list_next(iter))) {
-			if (job_ptr->pack_job_id != pack_job->pack_job_id) {
-				error("%s: Bad pack_job_list for %pJ",
+			if (job_ptr->het_job_id != pack_job->het_job_id) {
+				error("%s: Bad het_job_list for %pJ",
 				      __func__, job_ptr);
 				continue;
 			}
@@ -16651,14 +16651,14 @@ static int _job_requeue(uid_t uid, job_record_t *job_ptr, bool preempt,
 	int rc = SLURM_SUCCESS, rc1;
 	ListIterator iter;
 
-	if (job_ptr->pack_job_id && !job_ptr->pack_job_list)
+	if (job_ptr->het_job_id && !job_ptr->het_job_list)
 		return ESLURM_NOT_PACK_JOB_LEADER;
 
-	if (job_ptr->pack_job_list) {
-		iter = list_iterator_create(job_ptr->pack_job_list);
+	if (job_ptr->het_job_list) {
+		iter = list_iterator_create(job_ptr->het_job_list);
 		while ((pack_job = list_next(iter))) {
-			if (job_ptr->pack_job_id != pack_job->pack_job_id) {
-				error("%s: Bad pack_job_list for %pJ",
+			if (job_ptr->het_job_id != pack_job->het_job_id) {
+				error("%s: Bad het_job_list for %pJ",
 				      __func__, job_ptr);
 				continue;
 			}
