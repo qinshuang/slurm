@@ -5167,8 +5167,8 @@ _rpc_abort_job(slurm_msg_t *msg)
 	_free_job_env(&job_env);
 
 #ifdef HAVE_NATIVE_CRAY
-	if (req->pack_jobid && (req->pack_jobid != NO_VAL))
-		jobid = req->pack_jobid;
+	if (req->het_job_id && (req->het_job_id != NO_VAL))
+		jobid = req->het_job_id;
 	else
 		jobid = req->job_id;
 #else
@@ -5290,8 +5290,8 @@ _rpc_terminate_job(slurm_msg_t *msg)
 
 	/* Use this when dealing with the job container */
 #ifdef HAVE_NATIVE_CRAY
-	if (req->pack_jobid && (req->pack_jobid != NO_VAL))
-		jobid = req->pack_jobid;
+	if (req->het_job_id && (req->het_job_id != NO_VAL))
+		jobid = req->het_job_id;
 	else
 		jobid = req->job_id;
 #else
