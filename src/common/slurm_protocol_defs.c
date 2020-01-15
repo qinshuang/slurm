@@ -5089,7 +5089,7 @@ extern int slurm_free_msg_data(slurm_msg_type_t type, void *data)
 		slurm_free_job_info(data);
 		break;
 	case REQUEST_HET_JOB_ALLOCATION:
-	case REQUEST_SUBMIT_BATCH_JOB_PACK:
+	case REQUEST_SUBMIT_BATCH_HET_JOB:
 	case RESPONSE_HET_JOB_ALLOCATION:
 		FREE_NULL_LIST(data);
 		break;
@@ -5451,8 +5451,8 @@ rpc_num2string(uint16_t opcode)
 		return "REQUEST_SIB_MSG";
 	case REQUEST_HET_JOB_ALLOC_INFO:
 		return "REQUEST_HET_JOB_ALLOC_INFO";
-	case REQUEST_SUBMIT_BATCH_JOB_PACK:
-		return "REQUEST_SUBMIT_BATCH_JOB_PACK";
+	case REQUEST_SUBMIT_BATCH_HET_JOB:
+		return "REQUEST_SUBMIT_BATCH_HET_JOB";
 
 	case REQUEST_JOB_STEP_CREATE:				/* 5001 */
 		return "REQUEST_JOB_STEP_CREATE";
