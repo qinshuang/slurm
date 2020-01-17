@@ -403,6 +403,146 @@ extern uint32_t slurm_job_get_grace_time(job_record_t *job_ptr)
 	return data;
 }
 
+
+static void _preempt_signal(job_record_t *job_ptr, uint32_t grace_time)
+{
+	if (job_ptr->preempt_time)
+		return;
+
+	job_ptr->preempt_time = time(NULL);
+	job_ptr->end_time = MIN(job_ptr->end_time,
+				(job_ptr->preempt_time + (time_t)grace_time));
+
+	/* Signal the job at the beginning of preemption GraceTime */
+	job_signal(job_ptr, SIGCONT, 0, 0, 0);
+	if (preempt_send_user_signal && job_ptr->warn_signal &&
+	    !(job_ptr->warn_flags & WARN_SENT))
+		send_job_warn_signal(job_ptr, true);
+	else
+		job_signal(job_ptr, SIGTERM, 0, 0, 0);
+}
+
+/*
+ * Check to see if a job is in a grace time.
+ * If no grace_time active then return 1.
+ * If grace_time is currently active then return -1.
+ */
+static int _job_check_grace_internal(void *x, void *arg)
+{
+	job_record_t *job_ptr = (job_record_t *)x;
+	job_record_t *preemptor_ptr = (job_record_t *)arg;
+
+	int rc = -1;
+	uint32_t grace_time = 0;
+
+	if (job_ptr->preempt_time) {
+		if (time(NULL) >= job_ptr->end_time)
+			rc = 1;
+		return rc;
+	}
+
+	/*
+	 * If this job is running in parts of a reservation
+	 */
+	if (job_borrow_from_resv_check(job_ptr, preemptor_ptr))
+		grace_time = job_ptr->warn_time;
+	else
+		grace_time = slurm_job_get_grace_time(job_ptr);
+
+	if (grace_time) {
+		debug("setting %u sec preemption grace time for %pJ to reclaim resources for %pJ",
+		      grace_time, job_ptr, preemptor_ptr);
+		_preempt_signal(job_ptr, grace_time);
+	} else
+		rc = 1;
+
+	return rc;
+}
+
+/*
+ * Check to see if a job (or hetjob) is in a grace time.
+ * If no grace_time active then return 0.
+ * If grace_time is currently active then return 1.
+ */
+static int _job_check_grace(job_record_t *job_ptr, job_record_t *preemptor_ptr)
+{
+	if (job_ptr->pack_job_list)
+		return list_for_each_nobreak(job_ptr->pack_job_list,
+					     _job_check_grace_internal,
+					     preemptor_ptr) <= 0 ? 1 : 0;
+
+	return _job_check_grace_internal(job_ptr, preemptor_ptr) < 0 ? 1 : 0;
+}
+
+static int _job_warn_signal_wrapper(void *x, void *arg)
+{
+	job_record_t *job_ptr = (job_record_t *)x;
+	bool ignore_time = *(bool *)arg;
+
+	/* Ignore Time is always true */
+	send_job_warn_signal(job_ptr, ignore_time);
+
+	return 0;
+}
+
+extern uint32_t slurm_job_preempt(job_record_t *job_ptr,
+				  job_record_t *preemptor_ptr,
+				  uint16_t mode, bool ignore_time)
+{
+	int rc = SLURM_ERROR;
+	/* If any job is in a grace period continue */
+	if (_job_check_grace(job_ptr, preemptor_ptr))
+		return SLURM_ERROR;
+
+	if (preempt_send_user_signal) {
+		if (job_ptr->pack_job_list)
+			(void)list_for_each(job_ptr->pack_job_list,
+					    _job_warn_signal_wrapper,
+					    &ignore_time);
+		else
+			send_job_warn_signal(job_ptr, ignore_time);
+	}
+
+	if (mode == PREEMPT_MODE_CANCEL) {
+		if (job_ptr->pack_job_list)
+			rc = pack_job_signal(job_ptr,
+					     SIGKILL, 0, 0, true);
+		else
+			rc = job_signal(job_ptr, SIGKILL, 0, 0, true);
+		if (rc == SLURM_SUCCESS) {
+			info("preempted %pJ has been killed to reclaim resources for %pJ",
+			     job_ptr, preemptor_ptr);
+		}
+	} else if (mode == PREEMPT_MODE_REQUEUE) {
+		/* job_requeue already handles het jobs */
+		rc = job_requeue(0, job_ptr->job_id,
+				 NULL, true, 0);
+		if (rc == SLURM_SUCCESS) {
+			info("preempted %pJ has been requeued to reclaim resources for %pJ",
+			     job_ptr, preemptor_ptr);
+		}
+	}
+
+	if (rc != SLURM_SUCCESS) {
+		if (job_ptr->pack_job_list)
+			rc = pack_job_signal(job_ptr,
+					     SIGKILL, 0, 0, true);
+		else
+			rc = job_signal(job_ptr, SIGKILL, 0, 0, true);
+		if (rc == SLURM_SUCCESS) {
+			info("%s: preempted %pJ had to be killed",
+			     __func__, job_ptr);
+		} else {
+			info("%s: preempted %pJ kill failure %s",
+			     __func__, job_ptr, slurm_strerror(rc));
+		}
+	}
+
+	if (rc == SLURM_SUCCESS)
+		job_ptr->preempt_time = time(NULL);
+
+	return rc;
+}
 /*
  * Return true if the preemptor can preempt the preemptee, otherwise false
  */
