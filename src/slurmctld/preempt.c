@@ -403,25 +403,6 @@ extern uint32_t slurm_job_get_grace_time(job_record_t *job_ptr)
 	return data;
 }
 
-
-static void _preempt_signal(job_record_t *job_ptr, uint32_t grace_time)
-{
-	if (job_ptr->preempt_time)
-		return;
-
-	job_ptr->preempt_time = time(NULL);
-	job_ptr->end_time = MIN(job_ptr->end_time,
-				(job_ptr->preempt_time + (time_t)grace_time));
-
-	/* Signal the job at the beginning of preemption GraceTime */
-	job_signal(job_ptr, SIGCONT, 0, 0, 0);
-	if (preempt_send_user_signal && job_ptr->warn_signal &&
-	    !(job_ptr->warn_flags & WARN_SENT))
-		send_job_warn_signal(job_ptr, true);
-	else
-		job_signal(job_ptr, SIGTERM, 0, 0, 0);
-}
-
 /*
  * Check to see if a job is in a grace time.
  * If no grace_time active then return 1.
@@ -441,6 +422,8 @@ static int _job_check_grace_internal(void *x, void *arg)
 		return rc;
 	}
 
+	xassert(preemptor_ptr);
+
 	/*
 	 * If this job is running in parts of a reservation
 	 */
@@ -449,10 +432,18 @@ static int _job_check_grace_internal(void *x, void *arg)
 	else
 		grace_time = slurm_job_get_grace_time(job_ptr);
 
+	job_ptr->preempt_time = time(NULL);
+	job_ptr->end_time = MIN(job_ptr->end_time,
+				(job_ptr->preempt_time + (time_t)grace_time));
 	if (grace_time) {
 		debug("setting %u sec preemption grace time for %pJ to reclaim resources for %pJ",
 		      grace_time, job_ptr, preemptor_ptr);
-		_preempt_signal(job_ptr, grace_time);
+		job_signal(job_ptr, SIGCONT, 0, 0, 0);
+		if (preempt_send_user_signal && job_ptr->warn_signal &&
+		    !(job_ptr->warn_flags & WARN_SENT))
+			send_job_warn_signal(job_ptr, true);
+		else
+			job_signal(job_ptr, SIGTERM, 0, 0, 0);
 	} else
 		rc = 1;
 
