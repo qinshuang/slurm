@@ -48,6 +48,7 @@ typedef struct {
 	bitstr_t *node_map;
 	node_use_record_t *node_usage;
 	part_res_record_t *part_record_ptr;
+	int rc;
 } wrapper_rm_job_args_t;
 
 uint64_t def_cpu_per_gpu = 0;
@@ -1736,35 +1737,49 @@ static int _wrapper_job_res_rm_job(void *x, void *arg)
 	job_record_t *job_ptr = (job_record_t *)x;
 	wrapper_rm_job_args_t *wargs = (wrapper_rm_job_args_t *)arg;
 
+	if ((!IS_JOB_RUNNING(job_ptr) && !IS_JOB_SUSPENDED(job_ptr))) {
+		wargs->rc = 1;
+		return 0;
+	}
+
 	(void)job_res_rm_job(wargs->part_record_ptr, wargs->node_usage,
 			     job_ptr, wargs->action, wargs->job_fini,
 			     wargs->node_map);
+
+	/*
+	 * We might not had overlapped the main hetjob component partition, but
+	 * we might need these nodes.
+	 */
+	bit_or(wargs->node_map, job_ptr->node_bitmap);
+
 	return 0;
 }
 
-static void _job_res_rm_job(part_res_record_t *part_record_ptr,
-			    node_use_record_t *node_usage,
-			    job_record_t *job_ptr, int action, bool job_fini,
-			    bitstr_t *node_map)
+static int _job_res_rm_job(part_res_record_t *part_record_ptr,
+			   node_use_record_t *node_usage,
+			   job_record_t *job_ptr, int action, bool job_fini,
+			   bitstr_t *node_map)
 {
-	wrapper_rm_job_args_t wargs;
+	wrapper_rm_job_args_t wargs = {
+		.action = action,
+		.job_fini = job_fini,
+		.node_usage = node_usage,
+		.part_record_ptr = part_record_ptr,
+		.node_map = node_map
+	};
 
 	if (!job_ptr->pack_job_list) {
-		(void) job_res_rm_job(
-			part_record_ptr, node_usage, job_ptr,
-			action, job_fini, node_map);
-		return;
-	}
+		/* Check overlap on non-hetjobs */
+		if (!bit_overlap_any(node_map, job_ptr->node_bitmap)) {
+			return 1;
+		}
 
-	memset(&wargs, 0, sizeof(wargs));
-	wargs.action = action;
-	wargs.job_fini = job_fini;
-	wargs.node_usage = node_usage;
-	wargs.part_record_ptr = part_record_ptr;
-	wargs.node_map = node_map;
-
-	(void) list_for_each(job_ptr->pack_job_list, _wrapper_job_res_rm_job,
-			     &wargs);
+		(void)_wrapper_job_res_rm_job(job_ptr, &wargs);
+	} else
+		(void) list_for_each(job_ptr->pack_job_list,
+				     _wrapper_job_res_rm_job,
+				     &wargs);
+	return wargs.rc;
 }
 
 /*
@@ -2075,20 +2090,15 @@ top:	orig_node_map = bit_copy(save_node_map);
 
 		job_iterator = list_iterator_create(preemptee_candidates);
 		while ((tmp_job_ptr = list_next(job_iterator))) {
-			if (!IS_JOB_RUNNING(tmp_job_ptr) &&
-			    !IS_JOB_SUSPENDED(tmp_job_ptr))
-				continue;
 			mode = slurm_job_preempt_mode(tmp_job_ptr);
 			if ((mode != PREEMPT_MODE_REQUEUE)    &&
 			    (mode != PREEMPT_MODE_CANCEL))
 				continue;	/* can't remove job */
-			if (!bit_overlap_any(orig_node_map,
-					 tmp_job_ptr->node_bitmap))
-				continue;
 			/* Remove preemptable job now */
-			(void)_job_res_rm_job(future_part, future_usage,
-					      tmp_job_ptr, 0, false,
-					      orig_node_map);
+			if(_job_res_rm_job(future_part, future_usage,
+					   tmp_job_ptr, 0, false,
+					   orig_node_map))
+				continue;
 			bit_or(node_bitmap, orig_node_map);
 			rc = _job_test(job_ptr, node_bitmap, min_nodes,
 				       max_nodes, req_nodes,
