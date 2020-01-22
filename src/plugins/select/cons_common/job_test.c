@@ -1736,6 +1736,9 @@ static int _wrapper_overlap_job(void *x, void *arg)
 	job_record_t *job_ptr = (job_record_t *)x;
 	bitstr_t *node_map = (bitstr_t *)arg;
 
+	if ((!IS_JOB_RUNNING(job_ptr) && !IS_JOB_SUSPENDED(job_ptr)))
+		return 0;
+
 	if (bit_overlap_any(node_map, job_ptr->node_bitmap))
 		return 1;
 	return 0;
@@ -1756,10 +1759,6 @@ static int _wrapper_job_res_rm_job(void *x, void *arg)
 	job_record_t *job_ptr = (job_record_t *)x;
 	wrapper_rm_job_args_t *wargs = (wrapper_rm_job_args_t *)arg;
 
-	if ((!IS_JOB_RUNNING(job_ptr) && !IS_JOB_SUSPENDED(job_ptr))) {
-		wargs->rc = 1;
-		return 0;
-	}
 
 	(void)job_res_rm_job(wargs->part_record_ptr, wargs->node_usage,
 			     job_ptr, wargs->action, wargs->job_fini,
@@ -1796,7 +1795,7 @@ static int _job_res_rm_job(part_res_record_t *part_record_ptr,
 		(void) list_for_each(job_ptr->pack_job_list,
 				     _wrapper_job_res_rm_job,
 				     &wargs);
-	return wargs.rc;
+	return 0;
 }
 
 /*
