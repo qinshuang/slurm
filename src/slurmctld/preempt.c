@@ -82,11 +82,10 @@ static plugin_context_t *g_context = NULL;
 static pthread_mutex_t	    g_context_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool init_run = false;
 
-static int _is_job_preempt_exempt(job_record_t *preemptee_ptr,
-				  job_record_t *preemptor_ptr)
+static int _is_job_preempt_exempt_internal(void *x, void *key)
 {
-	if (!IS_JOB_RUNNING(preemptee_ptr) && !IS_JOB_SUSPENDED(preemptee_ptr))
-		return 1;
+	job_record_t *preemptee_ptr = (job_record_t *)x;
+	job_record_t *preemptor_ptr = (job_record_t *)key;
 
 	if (job_borrow_from_resv_check(preemptee_ptr, preemptor_ptr)) {
 		/*
@@ -94,11 +93,6 @@ static int _is_job_preempt_exempt(job_record_t *preemptee_ptr,
 		 * Automatic preemption.
 		 */
 	} else if (!(*(ops.preemptable))(preemptee_ptr, preemptor_ptr))
-		return 0;
-
-	if (!preemptee_ptr->node_bitmap ||
-	    !bit_overlap(preemptee_ptr->node_bitmap,
-			 preemptor_ptr->part_ptr->node_bitmap))
 		return 1;
 
 	if (preemptor_ptr->details &&
@@ -111,36 +105,22 @@ static int _is_job_preempt_exempt(job_record_t *preemptee_ptr,
 	return 0;
 }
 
-static int _comp_pack_job_id(void *x, void *key)
+static bool _is_job_preempt_exempt(job_record_t *preemptee_ptr,
+				  job_record_t *preemptor_ptr)
 {
-	job_record_t *job_ptr = (job_record_t *)x;
-	uint32_t job_id = *(uint32_t *)key;
-
-	return (job_ptr->job_id == job_id);
-}
-
-static int _is_job_preemptable(void *x, void *key)
-{
-	job_record_t *preemptee_ptr = (job_record_t *)x;
-	job_record_t *preemptor_ptr = (job_record_t *)key;
-
-	return !_is_job_preempt_exempt(preemptee_ptr, preemptor_ptr);
-}
-
-static int _is_hetjob_preempt_exempt(job_record_t *preemptee_master_ptr,
-				     job_record_t *preemptor_ptr)
-{
-	xassert(preemptee_master_ptr);
+	xassert(preemptee_ptr);
 	xassert(preemptor_ptr);
 
+	if (!preemptee_ptr->pack_job_list)
+		return _is_job_preempt_exempt_internal(
+			preemptee_ptr, preemptor_ptr);
 	/*
-	 * if any component job is preemptable then het job is not
+	 * All components of a job must be preemptable otherwise it is
 	 * preempt exempt
 	 */
-        if (list_find_first(preemptee_master_ptr->pack_job_list,
-			    _is_job_preemptable, preemptor_ptr))
-		return 0;
-	return 1;
+        return list_find_first(preemptee_ptr->pack_job_list,
+			       _is_job_preempt_exempt_internal,
+			       preemptor_ptr) ? true : false;
 }
 
 /*
@@ -175,30 +155,28 @@ static int _add_preemptable_job(void *x, void *arg)
 	preempt_candidates_t *candidates = (preempt_candidates_t *) arg;
 	job_record_t *preemptor = candidates->preemptor;
 
-	if (candidate->pack_job_id &&
-	    (candidate->pack_job_id != candidate->job_id)) {
-		candidate = find_job_record(candidate->pack_job_id);
-		if (!candidate || !candidate->pack_job_list) {
-			error("%s: hetjob master is corrupt! This should never happen",
-			      __func__);
-			return 0;
-		}
+	/*
+	 * We only want to look at the master component of a hetjob.  Since all
+	 * components have to be preemptable it should be here at some point.
+	 */
+	if (candidate->pack_job_id && !candidate->pack_job_list)
+		return 0;
 
-		/* if the master is already a candidate, skip */
-		if (candidates->preemptee_job_list &&
-		    list_find_first(candidates->preemptee_job_list,
-				    _comp_pack_job_id,
-				    &candidate->job_id))
-			return 0;
+	/*
+	 * We have to check the entire bitmap space here before we can check
+	 * each part of a hetjob in _is_job_preempt_exempt()
+	 */
+	if (!job_overlap_and_running(preemptor->part_ptr->node_bitmap,
+				     candidate))
+		return 0;
 
-		if (_is_hetjob_preempt_exempt(candidate, preemptor))
-			return 0;
-	} else if (_is_job_preempt_exempt(candidate, preemptor))
+	if (_is_job_preempt_exempt(candidate, preemptor))
 		return 0;
 
 	/* This job is a preemption candidate */
 	if (!candidates->preemptee_job_list)
 		candidates->preemptee_job_list = list_create(NULL);
+
 	list_append(candidates->preemptee_job_list, candidate);
 
 	return 0;
