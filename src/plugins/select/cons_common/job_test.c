@@ -1731,7 +1731,7 @@ static int _test_only(job_record_t *job_ptr, bitstr_t *node_bitmap,
 	return rc;
 }
 
-static int _wrapper_overlap_job(void *x, void *arg)
+static int _wrapper_overlap_job_any(void *x, void *arg)
 {
 	job_record_t *job_ptr = (job_record_t *)x;
 	bitstr_t *node_map = (bitstr_t *)arg;
@@ -1741,16 +1741,16 @@ static int _wrapper_overlap_job(void *x, void *arg)
 
 	if (bit_overlap_any(node_map, job_ptr->node_bitmap))
 		return 1;
+
 	return 0;
 }
 
-static int _overlap_job(bitstr_t *node_map, job_record_t *job_ptr)
+static int _overlap_job_any(bitstr_t *node_map, job_record_t *job_ptr)
 {
-	if (!job_ptr->pack_job_list) {
-		return _wrapper_overlap_job(job_ptr, node_map);
-	}
+	if (!job_ptr->pack_job_list)
+		return _wrapper_overlap_job_any(job_ptr, node_map);
 
-	return list_find_first(job_ptr->pack_job_list, _wrapper_overlap_job,
+	return list_find_first(job_ptr->pack_job_list, _wrapper_overlap_job_any,
 			       node_map) ? 1 : 0;
 }
 
@@ -1786,15 +1786,15 @@ static int _job_res_rm_job(part_res_record_t *part_record_ptr,
 		.node_map = node_map
 	};
 
-	if (!_overlap_job(node_map, job_ptr))
+	if (!_overlap_job_any(node_map, job_ptr))
 		return 1;
 
 	if (!job_ptr->pack_job_list)
 		(void)_wrapper_job_res_rm_job(job_ptr, &wargs);
 	else
-		(void) list_for_each(job_ptr->pack_job_list,
-				     _wrapper_job_res_rm_job,
-				     &wargs);
+		(void)list_for_each(job_ptr->pack_job_list,
+				    _wrapper_job_res_rm_job,
+				    &wargs);
 	return 0;
 }
 
@@ -2201,7 +2201,7 @@ top:	orig_node_map = bit_copy(save_node_map);
 				if ((mode != PREEMPT_MODE_REQUEUE)    &&
 				    (mode != PREEMPT_MODE_CANCEL))
 					continue;
-				if (!_overlap_job(node_bitmap, tmp_job_ptr))
+				if (!_overlap_job_any(node_bitmap, tmp_job_ptr))
 					continue;
 				if (tmp_job_ptr->details->usable_nodes)
 					break;
