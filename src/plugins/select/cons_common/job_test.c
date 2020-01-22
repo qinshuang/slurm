@@ -1754,11 +1754,34 @@ static int _overlap_job_any(bitstr_t *node_map, job_record_t *job_ptr)
 			       node_map) ? 1 : 0;
 }
 
-static int _wrapper_job_res_rm_job(void *x, void *arg)
+static int _wrapper_get_usable_nodes(void *x, void *arg)
 {
 	job_record_t *job_ptr = (job_record_t *)x;
 	wrapper_rm_job_args_t *wargs = (wrapper_rm_job_args_t *)arg;
 
+	wargs->rc += bit_overlap(wargs->node_map, job_ptr->node_bitmap);
+	return 0;
+}
+
+static int _get_usable_nodes(bitstr_t *node_map, job_record_t *job_ptr)
+{
+	wrapper_rm_job_args_t wargs = {
+		.node_map = node_map
+	};
+
+	if (!job_ptr->pack_job_list)
+		(void)_wrapper_overlap_job_any(job_ptr, &wargs);
+	else
+		(void)list_for_each_nobreak(job_ptr->pack_job_list,
+					    _wrapper_get_usable_nodes,
+					    &wargs);
+	return wargs.rc;
+}
+
+static int _wrapper_job_res_rm_job(void *x, void *arg)
+{
+	job_record_t *job_ptr = (job_record_t *)x;
+	wrapper_rm_job_args_t *wargs = (wrapper_rm_job_args_t *)arg;
 
 	(void)job_res_rm_job(wargs->part_record_ptr, wargs->node_usage,
 			     job_ptr, wargs->action, wargs->job_fini,
@@ -2167,9 +2190,8 @@ top:	orig_node_map = bit_copy(save_node_map);
 					    == 99999)
 						break;
 					tmp_job_ptr->details->usable_nodes =
-						bit_overlap(node_bitmap,
-							    tmp_job_ptr->
-							    node_bitmap);
+						_get_usable_nodes(node_bitmap,
+								  tmp_job_ptr);
 				}
 				while ((tmp_job_ptr = list_next(job_iterator))) {
 					tmp_job_ptr->details->usable_nodes = 0;
